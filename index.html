@@ -2,29 +2,67 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- viewport-fit=cover lets the canvas reach the notch edges; interactive-widget=resizes-content
+       keeps the layout in step with the on-screen keyboard instead of hiding UI behind it. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#1b1c1f">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>FilmCraft</title>
   <link rel="icon" href="favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="favicon.png">
   <style>
-    html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1c1f; }
-    canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    /* --app-h is kept up to date from the visual viewport (see the script at the end of <body>):
+       on phones the address bar and the keyboard change the usable height, and 100% / 100vh do
+       not follow them, which left the bottom of the canvas (and its UI) off-screen. */
+    html, body {
+      margin: 0; height: 100%; overflow: hidden; background: #1b1c1f;
+      height: var(--app-h, 100dvh);
+      overscroll-behavior: none;              /* no rubber-band scrolling of the page */
+      -webkit-text-size-adjust: 100%;         /* no font inflation in landscape */
+      text-size-adjust: 100%;
+    }
+    body {
+      position: fixed; inset: 0;              /* pinned: page scrolling cannot move the canvas */
+      -webkit-tap-highlight-color: transparent;
+      -webkit-user-select: none; user-select: none;
+      touch-action: manipulation;             /* kills the 300 ms double-tap zoom delay */
+    }
+    canvas {
+      position: absolute; inset: 0; width: 100%; height: 100%; display: block;
+      /* every touch belongs to the app: no page pan, pinch-zoom, double-tap zoom or callout
+         stealing the gesture before egui sees it */
+      touch-action: none;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none; user-select: none;
+      outline: none;
+    }
     #loading {
       position: absolute; inset: 0; display: flex; flex-direction: column; gap: 14px;
       align-items: center; justify-content: center; color: #c9c9cc;
       font: 14px/1.4 system-ui, sans-serif; pointer-events: none;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+      box-sizing: border-box;
     }
     #loading img { width: 56px; height: 56px; }
     #loading .err { color: #ff8a7a; white-space: pre-wrap; max-width: 70ch; pointer-events: auto; }
     #fatal {
       position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
       background: rgba(20, 20, 22, 0.88); color: #e6e6e8; font: 14px/1.45 system-ui, sans-serif; z-index: 10;
+      padding: calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
+               calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+      box-sizing: border-box;
     }
     #fatal.on { display: flex; }
-    #fatal .box { max-width: min(78ch, calc(100vw - 32px)); padding: 20px 24px; background: #26272b; border-radius: 8px; }
+    #fatal .box { max-width: min(78ch, 100%); padding: 20px 24px; background: #26272b; border-radius: 8px; }
     #fatal h1 { margin: 0 0 8px; font-size: 17px; color: #ff8a7a; }
-    #fatal pre { max-height: 40vh; overflow: auto; white-space: pre-wrap; font-size: 12px; color: #c9c9cc; }
-    #fatal button { font: inherit; padding: 6px 14px; border: 0; border-radius: 6px; background: #3b6fe0; color: #fff; cursor: pointer; }
+    #fatal pre { max-height: 40vh; max-height: 40dvh; overflow: auto; white-space: pre-wrap; font-size: 12px; color: #c9c9cc; }
+    #fatal button {
+      font: inherit; padding: 6px 14px; border: 0; border-radius: 6px; background: #3b6fe0; color: #fff; cursor: pointer;
+      min-height: 44px;                        /* a comfortable touch target */
+    }
   </style>
 </head>
 <body>
@@ -63,6 +101,38 @@
     // only after start-up: a failed start is shown in #loading below
     addEventListener("error", (ev) => { if (window.filmcraftLoad.readyMs && isFatal(ev.error || ev.message)) window.filmcraftFatal(ev.error || ev.message); });
     addEventListener("unhandledrejection", (ev) => { if (window.filmcraftLoad.readyMs && isFatal(ev.reason)) window.filmcraftFatal(ev.reason); });
+
+    // Mobile layout: size the app to the visual viewport so the address bar, the home indicator
+    // and the on-screen keyboard never cover part of the canvas. The canvas resizing is what makes
+    // eframe's ResizeObserver re-measure and repaint at the right size.
+    (function () {
+      const root = document.documentElement;
+      const canvas = document.getElementById("filmcraft_canvas");
+      let last = 0;
+      const applyHeight = () => {
+        const vv = window.visualViewport;
+        const h = Math.round((vv ? vv.height : window.innerHeight) || 0);
+        if (!h || h === last) return;
+        last = h;
+        root.style.setProperty("--app-h", h + "px");
+      };
+      applyHeight();
+      addEventListener("resize", applyHeight);
+      addEventListener("orientationchange", () => {
+        applyHeight();
+        setTimeout(applyHeight, 150);
+        setTimeout(applyHeight, 400);
+      });
+      if (window.visualViewport) {
+        visualViewport.addEventListener("resize", applyHeight);
+        visualViewport.addEventListener("scroll", applyHeight);
+      }
+      // iOS Safari still pinch-zooms the page on a canvas unless gesturestart is stopped;
+      // page zoom stays available everywhere else (accessibility).
+      addEventListener("gesturestart", (e) => { if (canvas && canvas.contains(e.target)) e.preventDefault(); });
+      // long-press on the canvas must not open the "save image / copy" callout mid-drag
+      if (canvas) canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+    })();
   </script>
   <script type="module">
     // `c1bd4e1574265f32` is replaced by `cargo xtask web` with a hash of the build: the glue and the
